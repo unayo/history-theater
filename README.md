@@ -1,18 +1,21 @@
 # 歷史人物對話劇場 · History Theater
 
-> 選兩位世界史名人，看兩個 AI 各自扮演他們、依隨機主題自動展開一場有立場、有交鋒的對話小劇場；使用者可隨時插話或純觀看。
+> 選兩位名人（如畫家林布蘭與維梅爾），看兩個 AI 各自扮演他們、用白話展開一場有立場、有交鋒的對話；並以 **RAG 檢索史料 grounding**，讓你邊看邊學到歷史與藝術知識。使用者可隨時插話或純觀看。
 
-把 LLM 真正接進 Nuxt 前端：**multi-agent 編排、SSE 串流 UI、多供應商容錯、成本權衡**
+把 LLM 真正接進 Nuxt 前端：**RAG 史料 grounding、multi-agent 編排、SSE 串流 UI、多供應商容錯、成本權衡**
 
-> ⚠️ **誠實免責**：對話由 LLM 生成，內容為 AI 想像、可能與史實不符，僅供娛樂與學習。準確度的收斂方案見 [Roadmap](#roadmap)。
+> ⚠️ **誠實免責**：對話由 LLM 生成。本專案以 RAG 檢索史料 grounding、收緊準確度，但 LLM 仍不可能 100% 正確，內容僅供娛樂與學習輔助，**非權威教材**。
 
 ## Demo
 
 - 🔗 Live：https://history-theater.vercel.app/
 
+<!-- TODO: 補一張操作 GIF（選人 → 對話串流 → 展開「📚 依據」） -->
+
 ## 功能
 
-- 兩個 AI 各演一人、依隨機主題輪流自動對話
+- **RAG 史料 grounding**：發言前檢索該人物的相關史料注入 prompt，壓制幻覺；每句附「📚 依據」出處可查證（白話學習導向）
+- 兩個 AI 各演一人、依主題輪流自動對話，有立場、有交鋒
 - 逐字串流輸出，依人物「手速」呈現自然打字節奏
 - 金鑰只在後端 server route，不進前端 bundle
 - Gemini 主 / Groq 備，額度用盡自動切換並於 UI 標示
@@ -24,6 +27,7 @@
 - **前端**：Nuxt 4（Vue 3 + TypeScript）、Tailwind CSS v4（Vite plugin）
 - **後端**：Nuxt Nitro server route（`server/api/*`）當代理層
 - **LLM**：Google Gemini（`gemini-2.5-flash`）主、Groq（`llama-3.3-70b-versatile`）備
+- **RAG**：Google `gemini-embedding-001`（768 維、離線預算成 JSON）＋ cosine 相似度檢索
 - **其他**：`opencc-js`（簡→繁字形正規化）
 - **套件管理**：pnpm
 
@@ -34,18 +38,20 @@
       │  POST /api/chat（人設＋歷史＋主題＋收尾階段）
       ▼
 ② Nitro server route（代理層，金鑰只在這裡）
+      │  RAG：embedQuery 算 query 向量 → 知識庫 cosine top-k → 注入【史料根據】
       │  斷路器檢查 → 選供應商（Gemini 主／Groq 備）
       ▼
 ③ Gemini / Groq
       │  SSE 文字增量
       ▼
 ④ Nitro server route
-      │  sseToText：轉成統一純文字流（＋ X-Provider 標頭）
+      │  sseToText：轉成統一純文字流（＋ X-Provider／X-Sources 標頭）
       ▼
 ⑤ 瀏覽器 chat.vue
-         OpenCC 簡→繁 → 打字機逐字浮現
+         OpenCC 簡→繁 → 打字機逐字浮現；X-Sources → 顯示「📚 依據」出處
 ```
 
+- **RAG 史料 grounding**：每次發言前用「主題＋最近對話」算 query 向量（`gemini-embedding-001`，taskType `RETRIEVAL_QUERY`），與離線預算好的知識庫向量做 cosine top-k，撈出該人物最相關的史料注入 prompt 的【史料根據】，要求據此用白話講、不可捏造；出處經 `X-Sources` 回傳前端顯示。embedding 與對話額度分開，**檢索失敗則跳過 RAG、對話照常（不單點故障）**。知識庫向量離線算好存 JSON（規模小、線性 cosine，不需向量資料庫）。
 - **server route 代理層**：金鑰只在後端（`runtimeConfig`），前端永遠打自己的 `/api/chat`，避免金鑰進前端 bundle 被盜用。
 - **多代理人編排與上下文管理**：前端 `runConversation()` 控制輪替與收尾，每輪只帶最近數句歷史（滑動視窗，控 token 成本）＋對手人設讓對話接得上；人物的 `thesis`／`tensions` 組成結構化 prompt，對話才有立場、有交鋒。
 - **SSE 串流與打字機解耦**：後端把兩家 SSE 統一成純文字流，前端邊收邊放緩衝、打字機逐字吐出——下載與顯示解耦，第一個字快速出現以降低感知延遲。
@@ -55,7 +61,7 @@
 
 ## 本機執行
 
-需 Node 20+ 與 pnpm。
+需 Node 22+ 與 pnpm。
 
 ```bash
 pnpm install
@@ -69,6 +75,12 @@ cp .env.example .env
 pnpm dev          # http://localhost:3000
 ```
 
+改了 RAG 知識庫（`app/data/knowledge.ts`）才需重建向量（一次性、需 Gemini key）：
+
+```bash
+node --env-file=.env scripts/build-embeddings.ts
+```
+
 其他指令：`pnpm build`（production build）、`pnpm preview`（本機預覽 build 結果）。
 
 ## 專案結構
@@ -76,18 +88,24 @@ pnpm dev          # http://localhost:3000
 ```
 app/
   pages/index.vue      選人卡片牆（同代排序、最多選 2）
-  pages/chat.vue       聊天室：編排、串流接收、打字機、插話/收尾/中止
+  pages/chat.vue       聊天室：編排、串流接收、打字機、插話/收尾/中止、「📚 依據」出處
   data/figures.ts      人物資料（bio / thesis / tensions / pace）
+  data/knowledge.ts    RAG 知識庫（史料 chunk：figureId / text / source）
   data/topics.ts       對話主題
   utils/era.ts         生卒年區間重疊判斷
 server/
-  api/chat.post.ts     LLM 代理層：prompt 組裝、SSE 轉接、供應商 fallback
+  api/chat.post.ts     LLM 代理層：RAG 檢索 → prompt 組裝、SSE 轉接、供應商 fallback
+  utils/rag.ts         RAG 檢索：embedQuery、cosine 相似度、top-k
+  data/knowledge-embeddings.json   離線預算好的知識庫向量
+scripts/
+  build-embeddings.ts  離線把知識庫算成向量（一次性，改 knowledge.ts 後重跑）
 ```
 
 ## Roadmap
 
-- **RAG grounding**：以檢索到的史料約束生成，收緊史實準確度（LLM 不可能 100% 正確，故先以誠實免責管理預期、再以 RAG 收斂）。
+- **更多藝術家對與題材**：目前已有「光影」（林布蘭↔維梅爾）、「寫實 vs 想像」（梵谷↔高更），可續擴。
 - **跨時空模式深化**：不同時代人物相遇的語氣與情境彩蛋。
+- **UI 顯示畫作**：對話搭配人物代表作，強化視覺與學習。
 
 ## 授權
 
