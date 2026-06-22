@@ -45,7 +45,7 @@ function buildSystemInstruction(
     : ''
   const crosstimeRule = crosstime ? '\n- 你和對方其實來自不同時代，可帶點跨越時空相遇的驚奇。' : ''
   return (
-    `你正在扮演歷史人物「${s.name}」（${s.region}）。\n\n` +
+    `你正在扮演藝術家「${s.name}」（${s.region}）。\n\n` +
     `【背景】${s.bio}\n` +
     `【你的核心立場】${s.thesis}\n` +
     conflictBlock +

@@ -24,9 +24,6 @@ function toggle(id: string): void {
 }
 
 const canStart = computed(() => selectedIds.value.length === MAX_PICKS)
-const selectedFigures = computed(() =>
-  figures.filter((f) => selectedIds.value.includes(f.id)),
-)
 // 排序基準
 const firstPick = computed(() => figures.find((f) => f.id === selectedIds.value[0]))
 
@@ -53,8 +50,8 @@ function formatYear(year: number): string {
 <template>
   <div class="min-h-screen bg-neutral-100 py-10 px-4 pb-28">
     <header class="mx-auto max-w-4xl text-center mb-8">
-      <h1 class="text-3xl font-bold text-neutral-800">歷史人物對話劇場</h1>
-      <p class="mt-2 text-neutral-500">挑兩位歷史人物，開一場跨時空對話</p>
+      <h1 class="text-3xl font-bold text-neutral-800">藝術家對話劇場</h1>
+      <p class="mt-2 text-neutral-500">挑兩位藝術家，旁聽他們為各自的藝術主張交鋒</p>
     </header>
 
     <ul class="mx-auto max-w-4xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
