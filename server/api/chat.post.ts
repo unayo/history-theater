@@ -1,8 +1,10 @@
 // 多供應商串流對話端點：持續吐文字增量供前端逐字浮現（降低感知延遲）。
 // 策略：先 Gemini（斷路冷卻中則跳過），失敗 fallback Groq；用哪家放 X-Provider 標頭。
 
+import { embedQuery, retrieve, type RetrievedSource } from '../utils/rag'
+
 interface ReqBody {
-  speaker?: { name?: string; bio?: string; speakingStyle?: string; region?: string; thesis?: string }
+  speaker?: { id?: string; name?: string; bio?: string; speakingStyle?: string; region?: string; thesis?: string }
   opponent?: { name?: string; tension?: string } // 對手名字＋這位 speaker 對他的衝突焦點
   history?: Array<{ name: string; text: string }>
   crosstime?: boolean
@@ -30,19 +32,28 @@ function buildSystemInstruction(
   s: NonNullable<ReqBody['speaker']>,
   crosstime: boolean,
   opponent: NonNullable<ReqBody['opponent']> = {},
+  sources: RetrievedSource[] = [],
 ): string {
   // 沒寫該配對的衝突焦點時給通用 fallback，避免「分歧」一段開天窗
   const tension = opponent.tension ?? '請自行找出你與對方在立場或價值上的根本分歧，並據此交鋒。'
   const conflictBlock = opponent.name ? `【你與${opponent.name}的分歧】${tension}\n` : ''
+  // 5b 把 RAG 檢索到的史料貼成【史料根據】，要求據此發言、別超範圍亂編（壓制幻覺）
+  const groundingBlock = sources.length
+    ? '【史料根據】以下是與本題相關的史實，請「根據這些」用白話講清楚，不要捏造超出範圍的細節：\n' +
+      sources.map((src) => `- ${src.text}（${src.source}）`).join('\n') +
+      '\n'
+    : ''
   const crosstimeRule = crosstime ? '\n- 你和對方其實來自不同時代，可帶點跨越時空相遇的驚奇。' : ''
   return (
     `你正在扮演歷史人物「${s.name}」（${s.region}）。\n\n` +
     `【背景】${s.bio}\n` +
     `【你的核心立場】${s.thesis}\n` +
     conflictBlock +
+    groundingBlock +
     `【你的說話風格】${s.speakingStyle}\n\n` +
     `【對話規則】\n` +
     `- 第一人稱，完全以這個人物的身分、知識與時代語氣發言。\n` +
+    `- 像在向好奇的學習者解說：用淺白的現代白話把道理講明白，但仍保持你的身分與個性。\n` +
     `- 引用你具體的經歷、作品或主張來支撐論點，不要空泛抒情、不要講大道理。\n` +
     `- 每次回應要推進討論：提出新觀點、反問對方、或帶入新視角，別只附和。\n` +
     `- 立場與對方不同時就直說、不假意附和；可以承認對方有理之處，但最後仍堅守你的核心立場。\n` +
@@ -136,8 +147,22 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: '缺少 speaker' })
   }
 
-  const system = buildSystemInstruction(speaker, crosstime, opponent)
   const recent = history.slice(-HISTORY_LIMIT)
+
+  // 5a 發言前先用「主題＋最近對話」檢索此人物的相關史料；5e 失敗就跳過、照常聊（不讓 RAG 變單點故障）
+  let sources: RetrievedSource[] = []
+  if (geminiApiKey && speaker.id) {
+    try {
+      const recentText = recent.map((m) => m.text).join(' ')
+      const query = `${topic ?? ''} ${recentText}`.trim() || speaker.name!
+      const queryVec = await embedQuery(geminiApiKey, query)
+      sources = retrieve(queryVec, speaker.id, 3)
+    } catch (err) {
+      console.warn(`[chat] RAG 檢索失敗，跳過 grounding：${(err as Error).message}`)
+    }
+  }
+
+  const system = buildSystemInstruction(speaker, crosstime, opponent, sources)
   const transcript = recent.map((m) => `${m.name}：${m.text}`).join('\n')
   const topicLine = topic ? `這場對話的主題是「${topic}」，請圍繞它發展。\n` : ''
   // 收尾三階段：愈接近結束指示愈強，讓對話逐步降溫、最後一句明確只道別
@@ -183,5 +208,7 @@ export default defineEventHandler(async (event) => {
 
   setHeader(event, 'Content-Type', 'text/plain; charset=utf-8')
   setHeader(event, 'X-Provider', provider) // 前端可讀，得知這句由誰生成
+  // 5d 把 RAG 出處夾在標頭傳回前端（中文需 encode 才能放 header），下一步畫面顯示「📚 依據」
+  setHeader(event, 'X-Sources', encodeURIComponent(JSON.stringify(sources)))
   return stream
 })

@@ -36,6 +36,7 @@ const mode = computed<'normal' | 'crosstime'>(() => {
 interface Message {
   speakerId: string // 人物 id，或 'me' 代表使用者
   text: string
+  sources?: { text: string; source: string }[] // RAG 史料出處，顯示成「📚 依據」
 }
 // 收尾三階段：愈接近結束語氣愈強（降溫→總結→道別），讓結束有鋪陳而非突兀切斷
 type ClosingStage = 'winding' | 'summary' | 'farewell'
@@ -97,6 +98,7 @@ async function speak(speaker: Figure, closing?: ClosingStage): Promise<boolean> 
       signal: controller.signal,
       body: JSON.stringify({
         speaker: {
+          id: speaker.id, // 後端據此到該人物的知識庫撈史料（RAG）
           name: speaker.name,
           bio: speaker.bio,
           speakingStyle: speaker.speakingStyle,
@@ -115,6 +117,16 @@ async function speak(speaker: Figure, closing?: ClosingStage): Promise<boolean> 
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
     // 記錄本句實際供應商：徽章即時反映主備切換（標頭缺漏時沿用上一個值，不清空）
     provider.value = (res.headers.get('X-Provider') as Provider) || provider.value
+    // RAG 出處：標頭是 encodeURIComponent 過的 JSON，decode 回陣列存進這則訊息（壞掉就不顯示、不影響對話）
+    const rawSources = res.headers.get('X-Sources')
+    if (rawSources) {
+      try {
+        const cur = messages.value[i]
+        if (cur) cur.sources = JSON.parse(decodeURIComponent(rawSources))
+      } catch {
+        // 標頭損壞 → 略過出處
+      }
+    }
 
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
@@ -331,6 +343,17 @@ function onInputType(): void {
               <span class="h-2 w-2 animate-bounce rounded-full bg-neutral-300"></span>
             </span>
           </p>
+          <!-- RAG 出處：學習導向的延伸閱讀，點開看這句的史料依據 -->
+          <details v-if="msg.speakerId !== 'me' && msg.sources?.length" class="mt-1">
+            <summary class="cursor-pointer text-xs text-neutral-400 transition hover:text-emerald-600">
+              📚 依據（{{ msg.sources.length }}）
+            </summary>
+            <ul class="mt-1 space-y-1 rounded-lg bg-neutral-50 p-2 text-xs leading-relaxed text-neutral-500 ring-1 ring-neutral-100">
+              <li v-for="(s, si) in msg.sources" :key="si">
+                <span class="font-medium text-neutral-600">{{ s.source }}</span>：{{ s.text }}
+              </li>
+            </ul>
+          </details>
         </div>
       </div>
       <!-- 真人聚焦輸入框時：使用者側冒出「…」打字泡泡，同時自動對話已暫停 -->
